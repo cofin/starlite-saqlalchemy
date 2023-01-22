@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 import saq
+from redis.asyncio import Redis
 from starlite.utils.serialization import default_serializer
 
-from starlite_saqlalchemy import constants, redis, settings, type_encoders, utils
+from starlite_saqlalchemy import constants, settings, type_encoders, utils
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Collection
@@ -35,9 +36,23 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-encoder = msgspec.json.Encoder(
+encoder = msgspec.msgpack.Encoder(
     enc_hook=partial(default_serializer, type_encoders=type_encoders.type_encoders_map)
 )
+
+redis_client: Redis[bytes] = Redis.from_url(
+    settings.redis.URL,
+    decode_responses=False,
+    socket_connect_timeout=5,
+    health_check_interval=5,
+    socket_keepalive=5,
+)
+"""Async [`Redis`][redis.Redis] instance.
+
+Configure via [CacheSettings][starlite_saqlalchemy.settings.RedisSettings].
+
+This has the addition of setting the default encoder and decoder to msgpack for redis connectivity.
+"""
 
 
 class Queue(saq.Queue):
@@ -50,7 +65,7 @@ class Queue(saq.Queue):
 
         Names the queue per the application slug - namespaces SAQ's redis keys to the app.
 
-        Configures `msgspec` for JSON serialization/deserialization if not
+        Configures `msgspec` for msgpack serialization/deserialization if not
         otherwise configured.
 
         Args:
@@ -59,7 +74,7 @@ class Queue(saq.Queue):
         """
         kwargs.setdefault("name", "background-worker")
         kwargs.setdefault("dump", encoder.encode)
-        kwargs.setdefault("load", msgspec.json.decode)
+        kwargs.setdefault("load", msgspec.msgpack.decode)
         super().__init__(*args, **kwargs)
 
     def namespace(self, key: str) -> str:
@@ -86,11 +101,11 @@ class Worker(saq.Worker):
         loop.create_task(self.start())
 
 
-queue = Queue(redis.client)
+queue = Queue(redis_client)
 """Async worker queue.
 
 [Queue][starlite_saqlalchemy.worker.Queue] instance instantiated with
-[redis][starlite_saqlalchemy.redis.client] instance.
+[redis_client][starlite_saqlalchemy.worker.redis_client] instance.
 """
 
 
